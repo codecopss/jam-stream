@@ -6,10 +6,11 @@ import {
 } from 'lucide-react';
 
 // Dynamic Network URL Detection Engine
-const BACKEND_URL = window.location.hostname === 'localhost' 
-    ? 'http://localhost:4000' 
-    : `${window.location.protocol}//${window.location.hostname}${window.location.port ? ':4000' : ''}`;
-
+const BACKEND_URL = import.meta.env.VITE_API_URL || (
+    window.location.hostname === 'localhost' 
+        ? 'http://localhost:4000' 
+        : `${window.location.protocol}//${window.location.hostname}${window.location.port ? ':4000' : ''}`
+);
 const socket = io(BACKEND_URL, {
     transports: ['polling', 'websocket'], // Allow HTTP polling first, then upgrade seamlessly
     secure: true,                         // Force secure protocol handling (wss://)
