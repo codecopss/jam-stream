@@ -129,7 +129,3 @@ To handle declarative browser route lookups cleanly on the edge CDN, navigate to
 Due to strict **Web Audio API Autoplay Policies** on modern mobile web browsers (iOS Safari/Android Chrome), background network streams are blocked until high-trust direct interaction occurs.
 
 * **Activation:** Upon joining a room via mobile, tap any execution control button (such as the primary **Play / Pause** toggle HUD bar) once manually. This interacts with the underlying AudioContext, allowing subsequent networked track-sync changes to play completely uninterrupted.
-
-```
-
-```
