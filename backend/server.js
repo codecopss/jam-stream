@@ -33,6 +33,7 @@ function getOrCreateRoom(roomId) {
             isPlaying: false,
             currentTime: 0,
             queue: [],
+            chatHistory: [], // Added chat storage per room
             interval: null
         };
 
@@ -75,7 +76,8 @@ function broadcastState(roomId) {
         currentTrack: room.currentTrack,
         isPlaying: room.isPlaying,
         currentTime: room.currentTime,
-        queue: room.queue
+        queue: room.queue,
+        chatHistory: room.chatHistory // Include chat history in room updates
     });
 }
 
@@ -131,7 +133,8 @@ io.on('connection', (socket) => {
             currentTrack: roomState.currentTrack,
             isPlaying: roomState.isPlaying,
             currentTime: roomState.currentTime,
-            queue: roomState.queue
+            queue: roomState.queue,
+            chatHistory: roomState.chatHistory
         });
     });
 
@@ -160,6 +163,27 @@ io.on('connection', (socket) => {
         advanceQueue(currentRoomId);
     });
 
+    // --- LIVE CHAT LISTENER ---
+    socket.on('sendMessage', (data) => {
+        if (!currentRoomId || !rooms[currentRoomId]) return;
+
+        const messageData = {
+            id: Date.now().toString(),
+            sender: data.sender || 'Anonymous',
+            text: data.text,
+            timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+        };
+
+        // Keep the last 50 messages per room to prevent memory leaks
+        rooms[currentRoomId].chatHistory.push(messageData);
+        if (rooms[currentRoomId].chatHistory.length > 50) {
+            rooms[currentRoomId].chatHistory.shift();
+        }
+
+        // Broadcast the new message to everyone in the room
+        io.to(currentRoomId).emit('newMessage', messageData);
+    });
+
     socket.on('disconnect', () => {
         if (currentRoomId) {
             cleanUpRoomIfEmpty(currentRoomId);
@@ -177,6 +201,5 @@ io.on('connection', (socket) => {
     }
 });
 
-// Network-independent port handling (Uses dynamic deployment ports or local port 4000)
 const PORT = process.env.PORT || 4000;
 server.listen(PORT, () => console.log(`Jam Multi-Room Server running on port ${PORT}`));
