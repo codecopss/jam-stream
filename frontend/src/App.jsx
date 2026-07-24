@@ -34,6 +34,11 @@ export default function CompleteJamMusicApp() {
     setNewMessageText('');
   };
 
+  const handleClearSearch = () => {
+    setSearchQuery('');
+    jam.setSearchResults([]);
+  };
+
   const t = isDarkMode ? {
     bg: 'bg-zinc-950 text-zinc-100', card: 'bg-zinc-900/60 border-zinc-800/80 hover:bg-zinc-900/90',
     input: 'bg-zinc-900/90 text-zinc-100 border-zinc-800 focus:ring-zinc-800',
@@ -72,26 +77,46 @@ export default function CompleteJamMusicApp() {
 
       <div className="flex flex-1 gap-6 overflow-hidden mb-28 relative">
         <div className="flex-1 overflow-y-auto space-y-4">
+          
+          {/* Search Input Bar with Clear Action */}
           <div className="flex gap-2 relative items-center">
             <Search className={`w-4 h-4 absolute left-4 ${t.muted}`} />
-            <input className={`w-full ${t.input} pl-11 pr-24 py-3 rounded-xl border text-sm focus:outline-none`} placeholder="Search tracks..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && jam.searchTracks(searchQuery)} />
-            <button onClick={() => jam.searchTracks(searchQuery)} className="absolute right-2 bg-emerald-500 text-zinc-950 text-xs font-bold px-4 py-1.5 rounded-lg">Search</button>
+            <input 
+              className={`w-full ${t.input} pl-11 pr-28 py-3 rounded-xl border text-sm focus:outline-none`} 
+              placeholder="Search tracks..." 
+              value={searchQuery} 
+              onChange={(e) => setSearchQuery(e.target.value)} 
+              onKeyDown={(e) => e.key === 'Enter' && jam.searchTracks(searchQuery)} 
+            />
+            <div className="absolute right-2 flex items-center gap-1.5">
+              {(searchQuery || jam.searchResults.length > 0) && (
+                <button 
+                  onClick={handleClearSearch} 
+                  className={`p-1.5 rounded-lg ${t.muted} hover:text-white transition-colors`}
+                  title="Clear search"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              )}
+              <button 
+                onClick={() => jam.searchTracks(searchQuery)} 
+                className="bg-emerald-500 text-zinc-950 text-xs font-bold px-4 py-1.5 rounded-lg hover:bg-emerald-400 active:scale-95 transition-all"
+              >
+                Search
+              </button>
+            </div>
           </div>
 
+          {/* Search Results */}
           <div className="space-y-2.5">
             {jam.searchResults.map((track) => (
               <div 
                 key={track.id} 
-                className={`flex justify-between items-center p-3.5 border rounded-xl shadow-sm cursor-pointer transition-colors ${t.card}`}
+                className={`flex justify-between items-center p-3.5 border rounded-xl shadow-sm cursor-pointer transition-colors active:bg-zinc-800/80 ${t.card}`}
                 onClick={() => jam.playTrack(track)}
               >
                 <div className="flex items-center gap-3.5 min-w-0 flex-1">
-                  <div className="relative group shrink-0">
-                    <img src={track.thumbnail} className="w-12 h-12 rounded-xl object-cover bg-zinc-800" alt="" />
-                    <div className="absolute inset-0 bg-black/40 rounded-xl flex items-center justify-center opacity-0 group-hover:opacity-100 md:hidden transition-opacity">
-                      <Play className="w-5 h-5 text-white fill-white" />
-                    </div>
-                  </div>
+                  <img src={track.thumbnail} className="w-12 h-12 rounded-xl object-cover bg-zinc-800 shrink-0" alt="" />
                   <div className="truncate">
                     <p className="font-bold text-sm truncate">{track.title}</p>
                     <p className={`text-xs ${t.muted} truncate`}>{track.artist}</p>
@@ -99,16 +124,19 @@ export default function CompleteJamMusicApp() {
                 </div>
 
                 <div className="flex items-center gap-2 shrink-0 ml-2" onClick={(e) => e.stopPropagation()}>
+                  {/* Play Button - Desktop Only (Mobile uses card tap directly) */}
                   <button 
                     onClick={() => jam.playTrack(track)} 
-                    className="flex items-center gap-1.5 text-xs font-bold px-3 py-2 rounded-xl bg-emerald-500 text-zinc-950 hover:bg-emerald-400 active:scale-95 transition-all"
+                    className="hidden md:flex items-center gap-1.5 text-xs font-bold px-3.5 py-2 rounded-xl bg-emerald-500 text-zinc-950 hover:bg-emerald-400 active:scale-95 transition-all"
                   >
                     <Play className="w-3.5 h-3.5 fill-zinc-950" />
-                    <span className="hidden sm:inline">Play</span>
+                    <span>Play</span>
                   </button>
+
+                  {/* Add to Queue Button */}
                   <button 
                     onClick={() => jam.addToQueue(track)} 
-                    className={`p-2 rounded-xl border ${t.btn} hover:scale-105 active:scale-95 transition-all`}
+                    className={`p-2.5 rounded-xl border ${t.btn} hover:scale-105 active:scale-95 transition-all`}
                     title="Add to Queue"
                   >
                     <Plus className="w-4 h-4" />
