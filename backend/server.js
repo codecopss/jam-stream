@@ -1,11 +1,25 @@
 const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
-const ytSearch = require('yt-search');
+const YTMusic = require('ytmusic-api');
+const NodeCache = require('node-cache');
 const cors = require('cors');
 
 const app = express();
 app.use(cors());
+
+// Initialize YouTube Music API & In-Memory Cache (1 hour TTL)
+const ytmusic = new YTMusic();
+const searchCache = new NodeCache({ stdTTL: 3600 });
+
+(async () => {
+    try {
+        await ytmusic.initialize();
+        console.log('YouTube Music API initialized successfully');
+    } catch (err) {
+        console.error('Failed to initialize YouTube Music API:', err);
+    }
+})();
 
 const server = http.createServer(app);
 const io = new Server(server, { cors: { origin: "*" } });
@@ -65,20 +79,36 @@ function broadcastState(roomId) {
     });
 }
 
+// OPTIMIZED FAST & CLEAN MUSIC SEARCH ENDPOINT
 app.get('/api/search', async (req, res) => {
     try {
-        const query = req.query.q;
+        const query = req.query.q?.trim().toLowerCase();
         if (!query) return res.status(400).json({ error: 'Missing query' });
-        const results = await ytSearch(query);
-        const tracks = results.videos.slice(0, 10).map(v => ({
-            id: v.videoId,
-            title: v.title,
-            artist: v.author.name,
-            duration: v.seconds,
-            thumbnail: v.thumbnail
+
+        // 1. Check cache for instant sub-10ms response
+        const cachedResults = searchCache.get(query);
+        if (cachedResults) {
+            return res.json(cachedResults);
+        }
+
+        // 2. Query YouTube Music for clean song tracks
+        const songs = await ytmusic.searchSongs(query);
+
+        // 3. Map clean track payload preserving your exact room track schema
+        const tracks = songs.slice(0, 10).map(s => ({
+            id: s.videoId,
+            title: s.name,
+            artist: s.artist?.name || 'Unknown Artist',
+            duration: s.duration || 0,
+            thumbnail: s.thumbnails?.pop()?.url || ''
         }));
+
+        // 4. Store in cache
+        searchCache.set(query, tracks);
+
         res.json(tracks);
     } catch (error) {
+        console.error('Search endpoint error:', error);
         res.status(500).send('Error searching');
     }
 });
