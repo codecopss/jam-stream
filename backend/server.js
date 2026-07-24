@@ -7,242 +7,157 @@ const cors = require('cors');
 
 const app = express();
 app.use(cors());
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 
-// Initialize YouTube Music API & In-Memory Cache (1 hour TTL)
+const server = http.createServer(app);
+const io = new Server(server, {
+  cors: {
+    origin: '*',
+    methods: ['GET', 'POST'],
+    allowedHeaders: ['*']
+  }
+});
+
 const ytmusic = new YTMusic();
 const searchCache = new NodeCache({ stdTTL: 3600 });
 
-(async () => {
-    try {
-        await ytmusic.initialize();
-        console.log('YouTube Music API initialized successfully');
-    } catch (err) {
-        console.error('Failed to initialize YouTube Music API:', err);
-    }
-})();
+ytmusic.initialize().then(() => console.log('YT Music Ready')).catch(console.error);
 
-const server = http.createServer(app);
-const io = new Server(server, { cors: { origin: "*" } });
+const rooms = {};
+const roomIntervals = {}; // Store intervals separately to avoid circular reference crashes!
 
-let rooms = {};
+const getRoom = (id) => {
+  if (!rooms[id]) {
+    rooms[id] = { 
+      currentTrack: null, 
+      isPlaying: false, 
+      currentTime: 0, 
+      queue: [], 
+      chatHistory: [] 
+    };
 
-function getOrCreateRoom(roomId) {
-    if (!rooms[roomId]) {
-        rooms[roomId] = {
-            currentTrack: null,
-            isPlaying: false,
-            currentTime: 0,
-            queue: [],
-            chatHistory: [], // Added chat storage per room
-            chatTimeout: null, // Timer for 10-minute chat clearing
-            interval: null
-        };
-
-        rooms[roomId].interval = setInterval(() => {
-            let room = rooms[roomId];
-            if (room && room.isPlaying && room.currentTrack) {
-                room.currentTime += 1;
-                
-                if (room.currentTime >= room.currentTrack.duration) {
-                    advanceQueue(roomId);
-                } else {
-                    broadcastState(roomId);
-                }
-            }
-        }, 1000);
-    }
-    return rooms[roomId];
-}
-
-function resetChatInactivityTimer(roomId) {
-    let room = rooms[roomId];
-    if (!room) return;
-
-    if (room.chatTimeout) clearTimeout(room.chatTimeout);
-
-    // Auto-clear chat after 10 minutes (600,000 ms) of inactivity
-    room.chatTimeout = setTimeout(() => {
-        if (rooms[roomId]) {
-            rooms[roomId].chatHistory = [];
-            broadcastState(roomId);
-            console.log(`[Chat] Room ${roomId} chat history auto-cleared due to 10m inactivity.`);
+    roomIntervals[id] = setInterval(() => {
+      const r = rooms[id];
+      if (r?.isPlaying && r.currentTrack) {
+        if (++r.currentTime >= r.currentTrack.duration) {
+          advanceQueue(id);
+        } else {
+          broadcastState(id);
         }
-    }, 10 * 60 * 1000);
-}
+      }
+    }, 1000);
+  }
+  return rooms[id];
+};
 
-function advanceQueue(roomId) {
-    let room = rooms[roomId];
-    if (!room) return;
-    
-    if (room.queue.length > 0) {
-        room.currentTrack = room.queue.shift();
-        room.isPlaying = true;
-        room.currentTime = 0;
-    } else {
-        room.currentTrack = null;
-        room.isPlaying = false;
-        room.currentTime = 0;
-    }
-    broadcastState(roomId);
-}
+const advanceQueue = (id) => {
+  const r = rooms[id];
+  if (!r) return;
+  r.currentTrack = r.queue.shift() || null;
+  r.isPlaying = !!r.currentTrack;
+  r.currentTime = 0;
+  broadcastState(id);
+};
 
-function broadcastState(roomId) {
-    let room = rooms[roomId];
-    if (!room) return;
-    io.to(roomId).emit('stateUpdate', {
-        currentTrack: room.currentTrack,
-        isPlaying: room.isPlaying,
-        currentTime: room.currentTime,
-        queue: room.queue,
-        chatHistory: room.chatHistory // Include chat history in room updates
-    });
-}
+const broadcastState = (id) => {
+  if (rooms[id]) {
+    io.to(id).emit('stateUpdate', rooms[id]);
+  }
+};
 
-// OPTIMIZED FAST & CLEAN MUSIC SEARCH ENDPOINT
 app.get('/api/search', async (req, res) => {
-    try {
-        const query = req.query.q?.trim().toLowerCase();
-        if (!query) return res.status(400).json({ error: 'Missing query' });
+  const q = req.query.q?.trim().toLowerCase();
+  if (!q) return res.status(400).send('Missing query');
+  if (searchCache.has(q)) return res.json(searchCache.get(q));
 
-        // 1. Check cache for instant sub-10ms response
-        const cachedResults = searchCache.get(query);
-        if (cachedResults) {
-            return res.json(cachedResults);
-        }
-
-        // 2. Query YouTube Music for clean song tracks
-        const songs = await ytmusic.searchSongs(query);
-
-        // 3. Map clean track payload preserving your exact room track schema
-        const tracks = songs.slice(0, 10).map(s => ({
-            id: s.videoId,
-            title: s.name,
-            artist: s.artist?.name || 'Unknown Artist',
-            duration: s.duration || 0,
-            thumbnail: s.thumbnails?.pop()?.url || ''
-        }));
-
-        // 4. Store in cache
-        searchCache.set(query, tracks);
-
-        res.json(tracks);
-    } catch (error) {
-        console.error('Search endpoint error:', error);
-        res.status(500).send('Error searching');
-    }
+  try {
+    const songs = await ytmusic.searchSongs(q);
+    const tracks = songs.slice(0, 10).map((s) => ({
+      id: s.videoId, 
+      title: s.name, 
+      artist: s.artist?.name || 'Unknown',
+      duration: s.duration || 0, 
+      thumbnail: s.thumbnails?.pop()?.url || ''
+    }));
+    searchCache.set(q, tracks);
+    res.json(tracks);
+  } catch (err) {
+    res.status(500).send('Search failed');
+  }
 });
 
 io.on('connection', (socket) => {
-    let currentRoomId = null;
+  let currentRoom = null;
 
-    socket.on('joinRoom', (roomId) => {
-        if (!roomId) return;
+  socket.on('joinRoom', (id) => {
+    if (!id) return;
+    if (currentRoom) socket.leave(currentRoom);
 
-        if (currentRoomId) {
-            socket.leave(currentRoomId);
-            cleanUpRoomIfEmpty(currentRoomId);
-        }
+    currentRoom = id;
+    socket.join(id);
 
-        currentRoomId = roomId;
-        socket.join(roomId);
-        
-        let roomState = getOrCreateRoom(roomId);
-        
-        socket.emit('stateUpdate', {
-            currentTrack: roomState.currentTrack,
-            isPlaying: roomState.isPlaying,
-            currentTime: roomState.currentTime,
-            queue: roomState.queue,
-            chatHistory: roomState.chatHistory
-        });
-    });
+    const roomState = getRoom(id);
+    socket.emit('stateUpdate', roomState);
+  });
 
-    socket.on('playTrack', (track) => {
-        if (!currentRoomId || !rooms[currentRoomId]) return;
-        rooms[currentRoomId].currentTrack = track;
-        rooms[currentRoomId].isPlaying = true;
-        rooms[currentRoomId].currentTime = 0;
-        broadcastState(currentRoomId);
-    });
+  socket.on('sendMessage', (data) => {
+    const targetRoom = data?.roomId || currentRoom;
+    if (!targetRoom || !data?.text) return;
 
-    socket.on('togglePlay', (playing) => {
-        if (!currentRoomId || !rooms[currentRoomId]) return;
-        rooms[currentRoomId].isPlaying = playing;
-        broadcastState(currentRoomId);
-    });
+    const r = getRoom(targetRoom);
+    
+    const msg = {
+      id: data.id || Date.now().toString(),
+      sender: data.sender || 'Anonymous',
+      text: String(data.text),
+      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    };
 
-    socket.on('addToQueue', (track) => {
-        if (!currentRoomId || !rooms[currentRoomId]) return;
-        rooms[currentRoomId].queue.push(track);
-        broadcastState(currentRoomId);
-    });
+    if (!Array.isArray(r.chatHistory)) r.chatHistory = [];
+    r.chatHistory.push(msg);
+    if (r.chatHistory.length > 50) r.chatHistory.shift();
 
-    socket.on('trackEnded', () => {
-        if (!currentRoomId) return;
-        advanceQueue(currentRoomId);
-    });
+    broadcastState(targetRoom);
+  });
 
-    // --- FIXED LIVE CHAT LISTENER ---
-    socket.on('sendMessage', (data) => {
-        // Resolve targetRoomId from payload or socket closure
-        const targetRoomId = data.roomId || currentRoomId;
+  socket.on('playTrack', (track) => {
+    if (!currentRoom) return;
+    const r = getRoom(currentRoom);
+    r.currentTrack = track; 
+    r.isPlaying = true; 
+    r.currentTime = 0;
+    broadcastState(currentRoom);
+  });
 
-        if (!targetRoomId) {
-            console.warn('[sendMessage] Skipped: No roomId provided or active on socket.');
-            return;
-        }
-
-        // Ensure room exists
-        const room = getOrCreateRoom(targetRoomId);
-
-        // Ensure current socket is joined to room
-        if (currentRoomId !== targetRoomId) {
-            socket.join(targetRoomId);
-            currentRoomId = targetRoomId;
-        }
-
-        const messageData = {
-            id: data.id || Date.now().toString(),
-            sender: data.sender || 'Anonymous',
-            text: data.text,
-            timestamp: data.timestamp || new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-        };
-
-        // Safety check for chatHistory array
-        if (!Array.isArray(room.chatHistory)) {
-            room.chatHistory = [];
-        }
-
-        // Keep last 50 messages to prevent memory leaks
-        room.chatHistory.push(messageData);
-        if (room.chatHistory.length > 50) {
-            room.chatHistory.shift();
-        }
-
-        // Reset the 10-minute inactivity timer
-        resetChatInactivityTimer(targetRoomId);
-
-        // Broadcast the new message to everyone in the room (including sender)
-        io.to(targetRoomId).emit('newMessage', messageData);
-    });
-
-    socket.on('disconnect', () => {
-        if (currentRoomId) {
-            cleanUpRoomIfEmpty(currentRoomId);
-        }
-    });
-
-    function cleanUpRoomIfEmpty(roomId) {
-        const clients = io.sockets.adapter.rooms.get(roomId);
-        if (!clients || clients.size === 0) {
-            if (rooms[roomId]) {
-                clearInterval(rooms[roomId].interval);
-                if (rooms[roomId].chatTimeout) clearTimeout(rooms[roomId].chatTimeout);
-                delete rooms[roomId];
-            }
-        }
+  socket.on('togglePlay', (playing) => {
+    if (currentRoom && rooms[currentRoom]) { 
+      rooms[currentRoom].isPlaying = playing; 
+      broadcastState(currentRoom); 
     }
+  });
+
+  socket.on('addToQueue', (track) => {
+    if (currentRoom && rooms[currentRoom]) { 
+      rooms[currentRoom].queue.push(track); 
+      broadcastState(currentRoom); 
+    }
+  });
+
+  socket.on('trackEnded', () => {
+    if (currentRoom) advanceQueue(currentRoom);
+  });
+
+  socket.on('disconnect', () => {
+    if (currentRoom && (!io.sockets.adapter.rooms.get(currentRoom) || io.sockets.adapter.rooms.get(currentRoom).size === 0)) {
+      if (roomIntervals[currentRoom]) {
+        clearInterval(roomIntervals[currentRoom]);
+        delete roomIntervals[currentRoom];
+      }
+      delete rooms[currentRoom];
+    }
+  });
 });
 
 const PORT = process.env.PORT || 4000;
-server.listen(PORT, () => console.log(`Jam Multi-Room Server running on port ${PORT}`));
+server.listen(PORT, () => console.log(`Server running on port ${PORT}`));

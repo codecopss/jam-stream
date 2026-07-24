@@ -6,12 +6,17 @@ const BACKEND_URL = import.meta.env.VITE_API_URL ||
     ? 'http://localhost:4000' 
     : `${window.location.protocol}//${window.location.hostname}${window.location.port ? ':4000' : ''}`);
 
-const socket = io(BACKEND_URL, { transports: ['polling', 'websocket'], secure: true, rejectUnauthorized: false });
+// Prioritize pure WebSocket transport first to fix long-polling network POST failures
+const socket = io(BACKEND_URL, { 
+  transports: ['websocket', 'polling'], 
+  secure: true, 
+  rejectUnauthorized: false 
+});
 
 export function useJamSocket() {
   const [roomId, setRoomId] = useState(() => new URLSearchParams(window.location.search).get('room') || 'lobby');
   const [searchResults, setSearchResults] = useState([]);
-  const [state, setState] = useState({ currentTrack: null, isPlaying: false, currentTime: 0, queue: [] });
+  const [state, setState] = useState({ currentTrack: null, isPlaying: false, currentTime: 0, queue: [], chatHistory: [] });
   const [volume, setVolume] = useState(50);
   const [popupMessage, setPopupMessage] = useState('');
   const [isAudioUnlocked, setIsAudioUnlocked] = useState(false);
@@ -143,6 +148,7 @@ export function useJamSocket() {
   const seekTo = (seconds) => isPlayerReady.current && playerRef.current?.seekTo(seconds, true);
 
   return {
+    socket,
     roomId, setRoomId,
     searchResults, setSearchResults, searchTracks,
     state, volume, setVolume,
