@@ -11,10 +11,40 @@ export default function CompleteJamMusicApp() {
   const [showQueue, setShowQueue] = useState(false);
   const [showChat, setShowChat] = useState(false);
   const [newMessageText, setNewMessageText] = useState('');
-  const [userName, setUserName] = useState(`User_${Math.floor(1000 + Math.random() * 9000)}`);
-  const chatEndRef = useRef(null);
 
+  // 1. PERSIST USERNAME IN LOCALSTORAGE
+  const [userName, setUserName] = useState(() => {
+    return localStorage.getItem('jam_username') || `User_${Math.floor(1000 + Math.random() * 9000)}`;
+  });
+
+  const chatEndRef = useRef(null);
   const chatMessages = jam.state?.chatHistory || [];
+
+  // Update localStorage when username changes
+  const handleNameChange = (e) => {
+    const newName = e.target.value;
+    setUserName(newName);
+    localStorage.setItem('jam_username', newName);
+  };
+
+  // 2. PREVENT PAUSE ON TAB SWITCH (VISIBILITY CHANGE HANDLING)
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      // If returning to tab and server says playing, ensure player continues
+      if (!document.hidden && jam.state?.isPlaying && jam.playerRef?.current) {
+        try {
+          if (jam.playerRef.current.getPlayerState?.() !== 1) {
+            jam.playerRef.current.playVideo();
+          }
+        } catch (err) {
+          // Player reference safety check
+        }
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
+  }, [jam.state?.isPlaying, jam.playerRef]);
 
   useEffect(() => {
     if (showChat) chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -51,7 +81,14 @@ export default function CompleteJamMusicApp() {
 
   return (
     <div className={`flex flex-col h-screen ${t.bg} font-sans overflow-hidden p-4 md:p-8 relative`}>
-      <div id="hidden-youtube-player" className="fixed bottom-0 right-0 w-[1px] h-[1px] opacity-10 pointer-events-none z-[-1]" />
+      {/* 
+        PREVENT BROWSER TAB BACKGROUND THROTTLING: 
+        Opacity 0.01 + 1px dimensions keep Chrome from auto-pausing the background iframe video when switching tabs.
+      */}
+      <div 
+        id="hidden-youtube-player" 
+        className="fixed bottom-0 left-0 w-1 h-1 opacity-[0.01] pointer-events-none z-10 overflow-hidden" 
+      />
 
       {/* Queue Alert Popup */}
       {jam.popupMessage && (
@@ -78,7 +115,7 @@ export default function CompleteJamMusicApp() {
       <div className="flex flex-1 gap-6 overflow-hidden mb-28 relative">
         <div className="flex-1 overflow-y-auto space-y-4">
           
-          {/* Search Input Bar with Clear Action */}
+          {/* Search Bar */}
           <div className="flex gap-2 relative items-center">
             <Search className={`w-4 h-4 absolute left-4 ${t.muted}`} />
             <input 
@@ -124,7 +161,6 @@ export default function CompleteJamMusicApp() {
                 </div>
 
                 <div className="flex items-center gap-2 shrink-0 ml-2" onClick={(e) => e.stopPropagation()}>
-                  {/* Play Button - Desktop Only (Mobile uses card tap directly) */}
                   <button 
                     onClick={() => jam.playTrack(track)} 
                     className="hidden md:flex items-center gap-1.5 text-xs font-bold px-3.5 py-2 rounded-xl bg-emerald-500 text-zinc-950 hover:bg-emerald-400 active:scale-95 transition-all"
@@ -133,7 +169,6 @@ export default function CompleteJamMusicApp() {
                     <span>Play</span>
                   </button>
 
-                  {/* Add to Queue Button */}
                   <button 
                     onClick={() => jam.addToQueue(track)} 
                     className={`p-2.5 rounded-xl border ${t.btn} hover:scale-105 active:scale-95 transition-all`}
@@ -174,7 +209,7 @@ export default function CompleteJamMusicApp() {
           <div className="p-3 border-b border-zinc-800 bg-zinc-900/40 flex items-center gap-2">
             <UserCheck className="w-4 h-4 text-emerald-500 shrink-0" />
             <span className="text-xs text-zinc-400">Name:</span>
-            <input type="text" value={userName} onChange={(e) => setUserName(e.target.value)} className={`w-full px-2.5 py-1 rounded-lg border text-xs font-semibold ${t.input}`} />
+            <input type="text" value={userName} onChange={handleNameChange} className={`w-full px-2.5 py-1 rounded-lg border text-xs font-semibold ${t.input}`} />
           </div>
 
           <div className="flex-1 overflow-y-auto p-4 space-y-3">

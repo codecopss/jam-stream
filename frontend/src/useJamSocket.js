@@ -6,10 +6,11 @@ const BACKEND_URL = import.meta.env.VITE_API_URL ||
     ? 'http://localhost:4000' 
     : `${window.location.protocol}//${window.location.hostname}${window.location.port ? ':4000' : ''}`);
 
-// Prioritize pure WebSocket transport first to fix long-polling network POST failures
+const isSecure = window.location.protocol === 'https:';
+
 const socket = io(BACKEND_URL, { 
-  transports: ['websocket', 'polling'], 
-  secure: true, 
+  transports: ['websocket'], 
+  secure: isSecure, 
   rejectUnauthorized: false 
 });
 
@@ -32,7 +33,7 @@ export function useJamSocket() {
     socket.emit('joinRoom', roomId);
   }, [roomId]);
 
-  // YouTube IFrame API Initialization
+  // YouTube IFrame API Initialization with Tab-Switch Pause Guard
   useEffect(() => {
     const initPlayer = () => {
       if (playerRef.current) return;
@@ -50,7 +51,16 @@ export function useJamSocket() {
             isPlayerReady.current = true; 
             playerRef.current.setVolume(volume); 
           },
-          onStateChange: (e) => e.data === window.YT.PlayerState.ENDED && socket.emit('trackEnded')
+          onStateChange: (e) => {
+            // Track ended -> advance room queue
+            if (e.data === window.YT.PlayerState.ENDED) {
+              socket.emit('trackEnded');
+            }
+            // Ignore auto-pauses triggered by browser tab background throttling
+            if (e.data === window.YT.PlayerState.PAUSED && document.hidden) {
+              return;
+            }
+          }
         }
       });
     };
@@ -70,7 +80,7 @@ export function useJamSocket() {
   useEffect(() => {
     const handleVisibilityChange = () => {
       if (document.visibilityState === 'visible') {
-        socket.emit('requestState', roomId);
+        socket.emit('joinRoom', roomId);
       }
     };
 
@@ -108,7 +118,7 @@ export function useJamSocket() {
     }
   }, [volume]);
 
-  // iOS Safari User Gesture Audio Unlock
+  // iOS Safari / Mobile Gesture Audio Unlock
   const unlockAudio = () => {
     if (playerRef.current && isPlayerReady.current) {
       playerRef.current.playVideo();
@@ -149,6 +159,7 @@ export function useJamSocket() {
 
   return {
     socket,
+    playerRef,
     roomId, setRoomId,
     searchResults, setSearchResults, searchTracks,
     state, volume, setVolume,
