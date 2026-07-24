@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Search, Plus, ListMusic, X, Radio, Send, MessageSquare, UserCheck } from 'lucide-react';
+import { Search, Plus, ListMusic, X, Radio, Send, MessageSquare, UserCheck, Play } from 'lucide-react';
 import { useJamSocket } from './useJamSocket';
 import { Header } from './Header';
 import { PlayerControls } from './PlayerControls';
@@ -48,6 +48,14 @@ export default function CompleteJamMusicApp() {
     <div className={`flex flex-col h-screen ${t.bg} font-sans overflow-hidden p-4 md:p-8 relative`}>
       <div id="hidden-youtube-player" className="fixed bottom-0 right-0 w-[1px] h-[1px] opacity-10 pointer-events-none z-[-1]" />
 
+      {/* Queue Alert Popup */}
+      {jam.popupMessage && (
+        <div className="fixed top-6 right-6 z-50 bg-emerald-500 text-zinc-950 font-bold text-xs md:text-sm px-4 py-3 rounded-xl shadow-xl transition-all animate-bounce">
+          {jam.popupMessage}
+        </div>
+      )}
+
+      {/* Unlock Audio Overlay */}
       {!jam.isAudioUnlocked && (
         <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-zinc-900 border border-zinc-800 p-6 rounded-2xl max-w-sm text-center shadow-2xl">
@@ -72,17 +80,39 @@ export default function CompleteJamMusicApp() {
 
           <div className="space-y-2.5">
             {jam.searchResults.map((track) => (
-              <div key={track.id} className={`flex justify-between items-center p-3.5 border rounded-xl shadow-sm ${t.card}`}>
+              <div 
+                key={track.id} 
+                className={`flex justify-between items-center p-3.5 border rounded-xl shadow-sm cursor-pointer transition-colors ${t.card}`}
+                onClick={() => jam.playTrack(track)}
+              >
                 <div className="flex items-center gap-3.5 min-w-0 flex-1">
-                  <img src={track.thumbnail} className="w-12 h-12 rounded-xl object-cover bg-zinc-800" alt="" />
+                  <div className="relative group shrink-0">
+                    <img src={track.thumbnail} className="w-12 h-12 rounded-xl object-cover bg-zinc-800" alt="" />
+                    <div className="absolute inset-0 bg-black/40 rounded-xl flex items-center justify-center opacity-0 group-hover:opacity-100 md:hidden transition-opacity">
+                      <Play className="w-5 h-5 text-white fill-white" />
+                    </div>
+                  </div>
                   <div className="truncate">
                     <p className="font-bold text-sm truncate">{track.title}</p>
                     <p className={`text-xs ${t.muted} truncate`}>{track.artist}</p>
                   </div>
                 </div>
-                <div className="flex gap-2 shrink-0">
-                  <button onClick={() => jam.playTrack(track)} className="hidden md:block text-xs font-bold px-4 py-2.5 rounded-xl bg-emerald-500 text-zinc-950">Play</button>
-                  <button onClick={() => jam.addToQueue(track)} className={`p-2.5 rounded-xl border ${t.btn}`}><Plus className="w-4 h-4" /></button>
+
+                <div className="flex items-center gap-2 shrink-0 ml-2" onClick={(e) => e.stopPropagation()}>
+                  <button 
+                    onClick={() => jam.playTrack(track)} 
+                    className="flex items-center gap-1.5 text-xs font-bold px-3 py-2 rounded-xl bg-emerald-500 text-zinc-950 hover:bg-emerald-400 active:scale-95 transition-all"
+                  >
+                    <Play className="w-3.5 h-3.5 fill-zinc-950" />
+                    <span className="hidden sm:inline">Play</span>
+                  </button>
+                  <button 
+                    onClick={() => jam.addToQueue(track)} 
+                    className={`p-2 rounded-xl border ${t.btn} hover:scale-105 active:scale-95 transition-all`}
+                    title="Add to Queue"
+                  >
+                    <Plus className="w-4 h-4" />
+                  </button>
                 </div>
               </div>
             ))}
