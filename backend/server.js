@@ -34,6 +34,7 @@ function getOrCreateRoom(roomId) {
             currentTime: 0,
             queue: [],
             chatHistory: [], // Added chat storage per room
+            chatTimeout: null, // Timer for 10-minute chat clearing
             interval: null
         };
 
@@ -51,6 +52,22 @@ function getOrCreateRoom(roomId) {
         }, 1000);
     }
     return rooms[roomId];
+}
+
+function resetChatInactivityTimer(roomId) {
+    let room = rooms[roomId];
+    if (!room) return;
+
+    if (room.chatTimeout) clearTimeout(room.chatTimeout);
+
+    // Auto-clear chat after 10 minutes (600,000 ms) of inactivity
+    room.chatTimeout = setTimeout(() => {
+        if (rooms[roomId]) {
+            rooms[roomId].chatHistory = [];
+            broadcastState(roomId);
+            console.log(`[Chat] Room ${roomId} chat history auto-cleared due to 10m inactivity.`);
+        }
+    }, 10 * 60 * 1000);
 }
 
 function advanceQueue(roomId) {
@@ -119,6 +136,8 @@ io.on('connection', (socket) => {
     let currentRoomId = null;
 
     socket.on('joinRoom', (roomId) => {
+        if (!roomId) return;
+
         if (currentRoomId) {
             socket.leave(currentRoomId);
             cleanUpRoomIfEmpty(currentRoomId);
@@ -163,25 +182,48 @@ io.on('connection', (socket) => {
         advanceQueue(currentRoomId);
     });
 
-    // --- LIVE CHAT LISTENER ---
+    // --- FIXED LIVE CHAT LISTENER ---
     socket.on('sendMessage', (data) => {
-        if (!currentRoomId || !rooms[currentRoomId]) return;
+        // Resolve targetRoomId from payload or socket closure
+        const targetRoomId = data.roomId || currentRoomId;
 
-        const messageData = {
-            id: Date.now().toString(),
-            sender: data.sender || 'Anonymous',
-            text: data.text,
-            timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-        };
-
-        // Keep the last 50 messages per room to prevent memory leaks
-        rooms[currentRoomId].chatHistory.push(messageData);
-        if (rooms[currentRoomId].chatHistory.length > 50) {
-            rooms[currentRoomId].chatHistory.shift();
+        if (!targetRoomId) {
+            console.warn('[sendMessage] Skipped: No roomId provided or active on socket.');
+            return;
         }
 
-        // Broadcast the new message to everyone in the room
-        io.to(currentRoomId).emit('newMessage', messageData);
+        // Ensure room exists
+        const room = getOrCreateRoom(targetRoomId);
+
+        // Ensure current socket is joined to room
+        if (currentRoomId !== targetRoomId) {
+            socket.join(targetRoomId);
+            currentRoomId = targetRoomId;
+        }
+
+        const messageData = {
+            id: data.id || Date.now().toString(),
+            sender: data.sender || 'Anonymous',
+            text: data.text,
+            timestamp: data.timestamp || new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+        };
+
+        // Safety check for chatHistory array
+        if (!Array.isArray(room.chatHistory)) {
+            room.chatHistory = [];
+        }
+
+        // Keep last 50 messages to prevent memory leaks
+        room.chatHistory.push(messageData);
+        if (room.chatHistory.length > 50) {
+            room.chatHistory.shift();
+        }
+
+        // Reset the 10-minute inactivity timer
+        resetChatInactivityTimer(targetRoomId);
+
+        // Broadcast the new message to everyone in the room (including sender)
+        io.to(targetRoomId).emit('newMessage', messageData);
     });
 
     socket.on('disconnect', () => {
@@ -195,6 +237,7 @@ io.on('connection', (socket) => {
         if (!clients || clients.size === 0) {
             if (rooms[roomId]) {
                 clearInterval(rooms[roomId].interval);
+                if (rooms[roomId].chatTimeout) clearTimeout(rooms[roomId].chatTimeout);
                 delete rooms[roomId];
             }
         }

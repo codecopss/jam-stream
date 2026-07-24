@@ -10,7 +10,7 @@ export default function CompleteJamMusicApp() {
   const [isDarkMode, setIsDarkMode] = useState(true);
   const [showQueue, setShowQueue] = useState(false);
 
-  // --- Chat State & Logic ---
+  // --- Chat State & Auto-Clear Logic ---
   const [showChat, setShowChat] = useState(false);
   const [chatMessages, setChatMessages] = useState([]);
   const [newMessageText, setNewMessageText] = useState('');
@@ -18,14 +18,15 @@ export default function CompleteJamMusicApp() {
   const chatEndRef = useRef(null);
   const inactivityTimerRef = useRef(null);
 
-  // 10-Minute Inactivity Clear
+  // Reset 10-minute inactivity timer on frontend
   const resetInactivityTimer = () => {
     if (inactivityTimerRef.current) clearTimeout(inactivityTimerRef.current);
     inactivityTimerRef.current = setTimeout(() => {
       setChatMessages([]);
-    }, 10 * 60 * 1000);
+    }, 10 * 60 * 1000); // 10 minutes
   };
 
+  // Sync historical chat from room state when connecting or switching rooms
   useEffect(() => {
     if (jam.state?.chatHistory) {
       setChatMessages(jam.state.chatHistory);
@@ -33,44 +34,56 @@ export default function CompleteJamMusicApp() {
     }
   }, [jam.state?.chatHistory]);
 
+  // Listen for incoming room-wide broadcast messages from socket
   useEffect(() => {
     if (!jam.socket) return;
 
     const handleNewMessage = (msg) => {
-      setChatMessages((prev) => [...prev, msg]);
+      setChatMessages((prev) => {
+        // Prevent duplicate rendering if already added locally
+        const exists = prev.some(
+          (m) => m.id === msg.id || (m.text === msg.text && m.sender === msg.sender && m.timestamp === msg.timestamp)
+        );
+        if (exists) return prev;
+        return [...prev, msg];
+      });
       resetInactivityTimer();
     };
 
     jam.socket.on('newMessage', handleNewMessage);
+
     return () => {
       jam.socket.off('newMessage', handleNewMessage);
     };
   }, [jam.socket]);
 
+  // Auto-scroll chat drawer on new messages
   useEffect(() => {
     if (showChat) {
       chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }
   }, [chatMessages, showChat]);
 
-  // Fix sending message to Socket
+  // Send message through socket to room
   const handleSendMessage = (e) => {
     e.preventDefault();
     if (!newMessageText.trim()) return;
 
     const messageData = {
-      id: Date.now(),
+      id: Date.now().toString(),
+      roomId: jam.roomId,
       sender: userName.trim() || 'Anonymous',
       text: newMessageText.trim(),
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
     };
 
+    // 1. Emit message through socket to server
     if (jam.socket) {
       jam.socket.emit('sendMessage', messageData);
-    } else {
-      // Local fallback display if socket is offline
-      setChatMessages((prev) => [...prev, messageData]);
     }
+
+    // 2. Optimistic UI update for immediate response on sender's screen
+    setChatMessages((prev) => [...prev, messageData]);
 
     setNewMessageText('');
     resetInactivityTimer();
@@ -88,22 +101,39 @@ export default function CompleteJamMusicApp() {
 
   return (
     <div className={`flex flex-col h-screen ${t.bg} font-sans overflow-hidden p-4 md:p-8 relative`}>
-      <div id="hidden-youtube-player" className="fixed bottom-0 right-0 w-[1px] h-[1px] opacity-10 pointer-events-none z-[-1]" />
+      {/* Background YouTube iframe anchor */}
+      <div 
+        id="hidden-youtube-player" 
+        className="fixed bottom-0 right-0 w-[1px] h-[1px] opacity-10 pointer-events-none z-[-1]" 
+      />
 
-      {/* iOS Unlock Prompt */}
+      {/* iOS Audio Unlock Modal */}
       {!jam.isAudioUnlocked && (
         <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex flex-col items-center justify-center p-4">
           <div className="bg-zinc-900 border border-zinc-800 p-6 rounded-2xl max-w-sm text-center shadow-2xl">
             <Radio className="w-10 h-10 text-emerald-500 mx-auto mb-3 animate-pulse" />
             <h3 className="text-lg font-bold text-white mb-2">Tap to Join Room</h3>
-            <button onClick={jam.unlockAudio} className="w-full py-3 bg-emerald-500 hover:bg-emerald-400 text-zinc-950 font-bold text-sm rounded-xl shadow-lg transition-transform active:scale-95">
+            <p className="text-xs text-zinc-400 mb-6">
+              iOS Safari requires direct interaction to enable synchronized audio playback.
+            </p>
+            <button 
+              onClick={jam.unlockAudio}
+              className="w-full py-3 bg-emerald-500 hover:bg-emerald-400 text-zinc-950 font-bold text-sm rounded-xl shadow-lg transition-transform active:scale-95"
+            >
               Enable Audio & Sync
             </button>
           </div>
         </div>
       )}
 
-      {/* Header with Chat Button Props */}
+      {/* Notifications */}
+      {jam.popupMessage && (
+        <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 bg-emerald-500 text-zinc-950 font-bold text-xs px-5 py-3 rounded-xl shadow-xl border border-emerald-400">
+          {jam.popupMessage}
+        </div>
+      )}
+
+      {/* Top Header Navigation Component */}
       <Header 
         roomId={jam.roomId} 
         setRoomId={jam.setRoomId} 
@@ -116,6 +146,7 @@ export default function CompleteJamMusicApp() {
 
       {/* Body Section */}
       <div className="flex flex-1 gap-6 overflow-hidden mb-28 relative">
+        {/* Track Search & Results Grid */}
         <div className="flex-1 overflow-y-auto space-y-4">
           <div className="flex gap-2 relative items-center">
             <Search className={`w-4 h-4 absolute left-4 ${t.muted}`} />
@@ -126,15 +157,32 @@ export default function CompleteJamMusicApp() {
               onChange={(e) => setSearchQuery(e.target.value)} 
               onKeyDown={(e) => e.key === 'Enter' && jam.searchTracks(searchQuery)} 
             />
-            <button onClick={() => jam.searchTracks(searchQuery)} className="absolute right-2 bg-emerald-500 hover:bg-emerald-600 text-zinc-950 text-xs font-bold px-4 py-1.5 rounded-lg shadow-md transition-all">
+            <button 
+              onClick={() => jam.searchTracks(searchQuery)} 
+              className="absolute right-2 bg-emerald-500 hover:bg-emerald-600 text-zinc-950 text-xs font-bold px-4 py-1.5 rounded-lg shadow-md transition-all"
+            >
               Search
             </button>
           </div>
 
+          {jam.searchResults.length > 0 && (
+            <div className="flex justify-end">
+              <button 
+                onClick={() => jam.setSearchResults([])} 
+                className={`flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 border rounded-lg shadow-sm ${t.btn}`}
+              >
+                <X className="w-3.5 h-3.5" /> Clear Results
+              </button>
+            </div>
+          )}
+
           <div className="space-y-2.5">
             {jam.searchResults.map((track) => (
               <div key={track.id} className={`flex justify-between items-center p-3.5 border rounded-xl shadow-sm transition-all ${t.card}`}>
-                <div onClick={() => window.innerWidth < 768 && jam.playTrack(track)} className="flex items-center gap-3.5 min-w-0 flex-1 cursor-pointer md:cursor-default">
+                <div 
+                  onClick={() => window.innerWidth < 768 && jam.playTrack(track)} 
+                  className="flex items-center gap-3.5 min-w-0 flex-1 cursor-pointer md:cursor-default"
+                >
                   <img src={track.thumbnail} className="w-12 h-12 rounded-xl object-cover shadow-sm bg-zinc-800" alt="" />
                   <div className="truncate">
                     <p className="font-bold text-sm truncate tracking-tight">{track.title}</p>
@@ -142,10 +190,16 @@ export default function CompleteJamMusicApp() {
                   </div>
                 </div>
                 <div className="flex gap-2 shrink-0">
-                  <button onClick={() => jam.playTrack(track)} className="hidden md:block text-xs font-bold px-4 py-2.5 rounded-xl bg-emerald-500 text-zinc-950 shadow-md active:scale-95 transition-transform">
+                  <button 
+                    onClick={() => jam.playTrack(track)} 
+                    className="hidden md:block text-xs font-bold px-4 py-2.5 rounded-xl bg-emerald-500 text-zinc-950 shadow-md active:scale-95 transition-transform"
+                  >
                     Play
                   </button>
-                  <button onClick={() => jam.addToQueue(track)} className={`p-2.5 rounded-xl border shadow-sm transition-transform active:scale-95 ${t.btn}`}>
+                  <button 
+                    onClick={() => jam.addToQueue(track)} 
+                    className={`p-2.5 rounded-xl border shadow-sm transition-transform active:scale-95 ${t.btn}`}
+                  >
                     <Plus className="w-4 h-4" />
                   </button>
                 </div>
@@ -154,11 +208,18 @@ export default function CompleteJamMusicApp() {
           </div>
         </div>
 
-        {/* Queue Drawer */}
+        {/* Room Queue Drawer */}
         <div className={`w-80 border-l pl-6 ${showQueue ? `fixed inset-y-0 right-0 z-50 p-6 w-80 border-l shadow-2xl ${t.panel} ${t.bg}` : 'hidden'} lg:flex lg:relative lg:p-0 lg:bg-transparent lg:border-none flex-col overflow-y-auto space-y-3`}>
           <div className="flex items-center justify-between text-xs font-bold uppercase tracking-wider">
-            <div className="flex items-center gap-2"><ListMusic className="w-4 h-4 text-emerald-500" /><span>Queue ({jam.state.queue.length})</span></div>
-            {showQueue && <button onClick={() => setShowQueue(false)} className={`text-[10px] font-bold px-2 py-1 border rounded-md shadow-sm ${t.btn} lg:hidden`}>Close</button>}
+            <div className="flex items-center gap-2">
+              <ListMusic className="w-4 h-4 text-emerald-500" />
+              <span>Queue ({jam.state.queue.length})</span>
+            </div>
+            {showQueue && (
+              <button onClick={() => setShowQueue(false)} className={`text-[10px] font-bold px-2 py-1 border rounded-md shadow-sm ${t.btn} lg:hidden`}>
+                Close
+              </button>
+            )}
           </div>
           {jam.state.queue.map((q, idx) => (
             <div key={`${q.id}-${idx}`} className={`flex items-center gap-2 p-2 border rounded-xl text-xs ${t.card}`}>
@@ -170,21 +231,24 @@ export default function CompleteJamMusicApp() {
         </div>
       </div>
 
-      {/* --- LIVE CHAT DRAWER PANEL --- */}
+      {/* Live Room Chat Drawer */}
       {showChat && (
         <div className={`fixed inset-y-0 right-0 z-50 w-full sm:w-96 border-l shadow-2xl flex flex-col ${t.panel} ${t.bg}`}>
-          {/* Header */}
+          {/* Top Chat Header */}
           <div className="p-4 border-b flex items-center justify-between border-zinc-800">
             <div className="flex items-center gap-2">
               <MessageSquare className="w-5 h-5 text-emerald-500" />
-              <h3 className="font-bold text-sm tracking-wide uppercase">Live Chat</h3>
+              <h3 className="font-bold text-sm tracking-wide uppercase">Live Room Chat</h3>
             </div>
-            <button onClick={() => setShowChat(false)} className={`p-1.5 rounded-lg border shadow-sm ${t.btn}`}>
+            <button 
+              onClick={() => setShowChat(false)} 
+              className={`p-1.5 rounded-lg border shadow-sm ${t.btn}`}
+            >
               <X className="w-4 h-4" />
             </button>
           </div>
 
-          {/* Editable Username Input */}
+          {/* Editable Username Bar */}
           <div className="p-3 border-b border-zinc-800/80 bg-zinc-900/40 flex items-center gap-2">
             <UserCheck className="w-4 h-4 text-emerald-500 shrink-0" />
             <span className="text-xs text-zinc-400 shrink-0">Name:</span>
@@ -192,12 +256,12 @@ export default function CompleteJamMusicApp() {
               type="text" 
               value={userName} 
               onChange={(e) => setUserName(e.target.value)} 
-              placeholder="Your name"
-              className={`w-full px-2 py-1 rounded-lg border text-xs font-semibold focus:outline-none focus:ring-1 ${t.input}`}
+              placeholder="Your display name"
+              className={`w-full px-2.5 py-1 rounded-lg border text-xs font-semibold focus:outline-none focus:ring-1 ${t.input}`}
             />
           </div>
 
-          {/* Message List */}
+          {/* Chat Messages Log */}
           <div className="flex-1 overflow-y-auto p-4 space-y-3">
             {chatMessages.length === 0 ? (
               <p className={`text-xs text-center my-8 ${t.muted}`}>No messages yet. Say hello!</p>
@@ -217,7 +281,7 @@ export default function CompleteJamMusicApp() {
             <div ref={chatEndRef} />
           </div>
 
-          {/* Input Form */}
+          {/* Chat Input Bar */}
           <form onSubmit={handleSendMessage} className="p-3 border-t border-zinc-800 flex gap-2">
             <input 
               type="text"
@@ -236,7 +300,7 @@ export default function CompleteJamMusicApp() {
         </div>
       )}
 
-      {/* Footer Controls */}
+      {/* Bottom Audio Player Controls */}
       <PlayerControls 
         state={jam.state}
         volume={jam.volume}
