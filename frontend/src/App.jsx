@@ -11,6 +11,10 @@ export default function CompleteJamMusicApp() {
   const [showQueue, setShowQueue] = useState(false);
   const [showChat, setShowChat] = useState(false);
   const [newMessageText, setNewMessageText] = useState('');
+  const [unreadCount, setUnreadCount] = useState(0);
+
+  // Store previous volume before muting
+  const prevVolumeRef = useRef(jam.volume || 80);
 
   // 1. PERSIST USERNAME IN LOCALSTORAGE
   const [userName, setUserName] = useState(() => {
@@ -26,6 +30,91 @@ export default function CompleteJamMusicApp() {
     setUserName(newName);
     localStorage.setItem('jam_username', newName);
   };
+
+  // Reset unread count when chat opens
+  useEffect(() => {
+    if (showChat) {
+      setUnreadCount(0);
+    }
+  }, [showChat]);
+
+  // Track unread messages when chat is closed
+  useEffect(() => {
+    if (!showChat && chatMessages.length > 0) {
+      setUnreadCount((prev) => prev + 1);
+    }
+  }, [chatMessages.length]);
+
+  // Keyboard Shortcuts Listener
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      const activeElement = document.activeElement;
+      const isTyping = activeElement && (
+        activeElement.tagName === 'INPUT' || 
+        activeElement.tagName === 'TEXTAREA' || 
+        activeElement.isContentEditable
+      );
+
+      // Search shortcut ('/')
+      if (e.key === '/' && !isTyping) {
+        e.preventDefault();
+        const searchInput = document.querySelector('input[placeholder*="Search"]');
+        searchInput?.focus();
+        return;
+      }
+
+      // Ignore standard player shortcuts if user is currently typing in an input
+      if (isTyping) return;
+
+      switch (e.key) {
+        case ' ': // Play / Pause
+          e.preventDefault();
+          jam.togglePlay();
+          break;
+
+        case 'ArrowUp': // Volume Up (+5%)
+          e.preventDefault();
+          jam.setVolume((prev) => Math.min(100, prev + 5));
+          break;
+
+        case 'ArrowDown': // Volume Down (-5%)
+          e.preventDefault();
+          jam.setVolume((prev) => Math.max(0, prev - 5));
+          break;
+
+        case 'm': // Toggle Mute / Unmute (Restores to PREVIOUS volume)
+        case 'M':
+          e.preventDefault();
+          jam.setVolume((currentVol) => {
+            if (currentVol > 0) {
+              prevVolumeRef.current = currentVol;
+              return 0;
+            } else {
+              return prevVolumeRef.current > 0 ? prevVolumeRef.current : 80;
+            }
+          });
+          break;
+
+        case 'q': // Toggle Queue
+        case 'Q':
+          e.preventDefault();
+          setShowQueue((prev) => !prev);
+          break;
+
+        case 'c': // Toggle Chat
+        case 'C':
+          e.preventDefault();
+          setShowChat((prev) => !prev);
+          break;
+
+        default:
+          break;
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [jam.togglePlay, jam.setVolume, setShowQueue, setShowChat]);
 
   // 2. PREVENT PAUSE ON TAB SWITCH (VISIBILITY CHANGE HANDLING)
   useEffect(() => {
@@ -110,7 +199,7 @@ export default function CompleteJamMusicApp() {
         </div>
       )}
 
-      <Header roomId={jam.roomId} setRoomId={jam.setRoomId} isDarkMode={isDarkMode} setIsDarkMode={setIsDarkMode} showChat={showChat} setShowChat={setShowChat} t={t} />
+      <Header roomId={jam.roomId} setRoomId={jam.setRoomId} isDarkMode={isDarkMode} setIsDarkMode={setIsDarkMode} showChat={showChat} setShowChat={setShowChat} unreadCount={unreadCount} t={t} />
 
       <div className="flex flex-1 gap-6 overflow-hidden mb-28 relative">
         <div className="flex-1 overflow-y-auto space-y-4">
@@ -124,6 +213,7 @@ export default function CompleteJamMusicApp() {
               value={searchQuery} 
               onChange={(e) => setSearchQuery(e.target.value)} 
               onKeyDown={(e) => e.key === 'Enter' && jam.searchTracks(searchQuery)} 
+              aria-label="Search tracks"
             />
             <div className="absolute right-2 flex items-center gap-1.5">
               {(searchQuery || jam.searchResults.length > 0) && (
@@ -131,6 +221,7 @@ export default function CompleteJamMusicApp() {
                   onClick={handleClearSearch} 
                   className={`p-1.5 rounded-lg ${t.muted} hover:text-white transition-colors`}
                   title="Clear search"
+                  aria-label="Clear search"
                 >
                   <X className="w-4 h-4" />
                 </button>
@@ -149,8 +240,11 @@ export default function CompleteJamMusicApp() {
             {jam.searchResults.map((track) => (
               <div 
                 key={track.id} 
+                tabIndex={0}
+                role="button"
                 className={`flex justify-between items-center p-3.5 border rounded-xl shadow-sm cursor-pointer transition-colors active:bg-zinc-800/80 ${t.card}`}
                 onClick={() => jam.playTrack(track)}
+                onKeyDown={(e) => e.key === 'Enter' && jam.playTrack(track)}
               >
                 <div className="flex items-center gap-3.5 min-w-0 flex-1">
                   <img src={track.thumbnail} className="w-12 h-12 rounded-xl object-cover bg-zinc-800 shrink-0" alt="" />
@@ -173,6 +267,7 @@ export default function CompleteJamMusicApp() {
                     onClick={() => jam.addToQueue(track)} 
                     className={`p-2.5 rounded-xl border ${t.btn} hover:scale-105 active:scale-95 transition-all`}
                     title="Add to Queue"
+                    aria-label="Add to Queue"
                   >
                     <Plus className="w-4 h-4" />
                   </button>
@@ -203,13 +298,13 @@ export default function CompleteJamMusicApp() {
         <div className={`fixed inset-y-0 right-0 z-50 w-full sm:w-96 border-l shadow-2xl flex flex-col ${t.panel} ${t.bg}`}>
           <div className="p-4 border-b flex items-center justify-between border-zinc-800">
             <div className="flex items-center gap-2"><MessageSquare className="w-5 h-5 text-emerald-500" /><h3 className="font-bold text-sm uppercase">Live Chat</h3></div>
-            <button onClick={() => setShowChat(false)} className={`p-1.5 rounded-lg border ${t.btn}`}><X className="w-4 h-4" /></button>
+            <button onClick={() => setShowChat(false)} className={`p-1.5 rounded-lg border ${t.btn}`} aria-label="Close Chat"><X className="w-4 h-4" /></button>
           </div>
 
           <div className="p-3 border-b border-zinc-800 bg-zinc-900/40 flex items-center gap-2">
             <UserCheck className="w-4 h-4 text-emerald-500 shrink-0" />
             <span className="text-xs text-zinc-400">Name:</span>
-            <input type="text" value={userName} onChange={handleNameChange} className={`w-full px-2.5 py-1 rounded-lg border text-xs font-semibold ${t.input}`} />
+            <input type="text" value={userName} onChange={handleNameChange} className={`w-full px-2.5 py-1 rounded-lg border text-xs font-semibold ${t.input}`} aria-label="Your Name" />
           </div>
 
           <div className="flex-1 overflow-y-auto p-4 space-y-3">
@@ -230,8 +325,8 @@ export default function CompleteJamMusicApp() {
           </div>
 
           <form onSubmit={handleSendMessage} className="p-3 border-t border-zinc-800 flex gap-2">
-            <input type="text" placeholder="Type a message..." value={newMessageText} onChange={(e) => setNewMessageText(e.target.value)} className={`flex-1 ${t.input} px-3 py-2 rounded-xl text-xs border`} />
-            <button type="submit" className="bg-emerald-500 text-zinc-950 p-2.5 rounded-xl hover:bg-emerald-400 transition-transform active:scale-95"><Send className="w-4 h-4 fill-zinc-950" /></button>
+            <input type="text" placeholder="Type a message..." value={newMessageText} onChange={(e) => setNewMessageText(e.target.value)} className={`flex-1 ${t.input} px-3 py-2 rounded-xl text-xs border`} aria-label="Type a message" />
+            <button type="submit" className="bg-emerald-500 text-zinc-950 p-2.5 rounded-xl hover:bg-emerald-400 transition-transform active:scale-95" aria-label="Send Message"><Send className="w-4 h-4 fill-zinc-950" /></button>
           </form>
         </div>
       )}
