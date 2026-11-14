@@ -8,7 +8,11 @@ const app = express();
 app.use(cors());
 
 const server = http.createServer(app);
-const io = new Server(server, { cors: { origin: "*" } });
+const io = new Server(server, { 
+    cors: { origin: "*" },
+    pingTimeout: 30000, // Increase timeout so background tabs don't drop instantly
+    pingInterval: 10000
+});
 
 let rooms = {};
 
@@ -17,25 +21,33 @@ function getOrCreateRoom(roomId) {
         rooms[roomId] = {
             currentTrack: null,
             isPlaying: false,
-            currentTime: 0,
+            startTime: 0,       // Absolute timestamp (Date.now()) when playback started
+            pausedAt: 0,        // Elapsed time before pause
             queue: [],
             interval: null
         };
 
+        // This interval now only checks if a track finished playing using absolute time
         rooms[roomId].interval = setInterval(() => {
             let room = rooms[roomId];
             if (room && room.isPlaying && room.currentTrack) {
-                room.currentTime += 1;
+                const elapsed = Math.floor((Date.now() - room.startTime) / 1000);
                 
-                if (room.currentTime >= room.currentTrack.duration) {
+                if (elapsed >= room.currentTrack.duration) {
                     advanceQueue(roomId);
-                } else {
-                    broadcastState(roomId);
                 }
             }
         }, 1000);
     }
     return rooms[roomId];
+}
+
+function getCurrentTime(room) {
+    if (!room.isPlaying || !room.currentTrack) {
+        return room.pausedAt || 0;
+    }
+    const elapsed = Math.floor((Date.now() - room.startTime) / 1000);
+    return Math.min(elapsed, room.currentTrack.duration);
 }
 
 function advanceQueue(roomId) {
@@ -45,11 +57,13 @@ function advanceQueue(roomId) {
     if (room.queue.length > 0) {
         room.currentTrack = room.queue.shift();
         room.isPlaying = true;
-        room.currentTime = 0;
+        room.startTime = Date.now();
+        room.pausedAt = 0;
     } else {
         room.currentTrack = null;
         room.isPlaying = false;
-        room.currentTime = 0;
+        room.startTime = 0;
+        room.pausedAt = 0;
     }
     broadcastState(roomId);
 }
@@ -60,7 +74,7 @@ function broadcastState(roomId) {
     io.to(roomId).emit('stateUpdate', {
         currentTrack: room.currentTrack,
         isPlaying: room.isPlaying,
-        currentTime: room.currentTime,
+        currentTime: getCurrentTime(room),
         queue: room.queue
     });
 }
@@ -100,22 +114,34 @@ io.on('connection', (socket) => {
         socket.emit('stateUpdate', {
             currentTrack: roomState.currentTrack,
             isPlaying: roomState.isPlaying,
-            currentTime: roomState.currentTime,
+            currentTime: getCurrentTime(roomState),
             queue: roomState.queue
         });
     });
 
     socket.on('playTrack', (track) => {
         if (!currentRoomId || !rooms[currentRoomId]) return;
-        rooms[currentRoomId].currentTrack = track;
-        rooms[currentRoomId].isPlaying = true;
-        rooms[currentRoomId].currentTime = 0;
+        let room = rooms[currentRoomId];
+        room.currentTrack = track;
+        room.isPlaying = true;
+        room.startTime = Date.now();
+        room.pausedAt = 0;
         broadcastState(currentRoomId);
     });
 
     socket.on('togglePlay', (playing) => {
         if (!currentRoomId || !rooms[currentRoomId]) return;
-        rooms[currentRoomId].isPlaying = playing;
+        let room = rooms[currentRoomId];
+        
+        if (playing) {
+            // Resuming: shift start time forward by how much time had already elapsed
+            room.startTime = Date.now() - (room.pausedAt * 1000);
+            room.isPlaying = true;
+        } else {
+            // Pausing: save current elapsed time
+            room.pausedAt = getCurrentTime(room);
+            room.isPlaying = false;
+        }
         broadcastState(currentRoomId);
     });
 
@@ -128,6 +154,17 @@ io.on('connection', (socket) => {
     socket.on('trackEnded', () => {
         if (!currentRoomId) return;
         advanceQueue(currentRoomId);
+    });
+
+    // Handle explicit client requests to resync when tab gains focus back
+    socket.on('requestSync', () => {
+        if (!currentRoomId || !rooms[currentRoomId]) return;
+        socket.emit('stateUpdate', {
+            currentTrack: rooms[currentRoomId].currentTrack,
+            isPlaying: rooms[currentRoomId].isPlaying,
+            currentTime: getCurrentTime(rooms[currentRoomId]),
+            queue: rooms[currentRoomId].queue
+        });
     });
 
     socket.on('disconnect', () => {
@@ -147,6 +184,5 @@ io.on('connection', (socket) => {
     }
 });
 
-// Network-independent port handling (Uses dynamic deployment ports or local port 4000)
 const PORT = process.env.PORT || 4000;
 server.listen(PORT, () => console.log(`Jam Multi-Room Server running on port ${PORT}`));
