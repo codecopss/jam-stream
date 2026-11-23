@@ -27,6 +27,7 @@ const searchCache = new NodeCache({ stdTTL: 3600 });
 ytmusic.initialize().then(() => console.log('YT Music Ready')).catch(console.error);
 
 const rooms = {};
+const roomCleanupTimers = {};
 
 const getRoom = (id) => {
   if (!rooms[id]) {
@@ -35,6 +36,7 @@ const getRoom = (id) => {
       isPlaying: false, 
       startTime: 0, // Epoch timestamp when playing started
       pausedAt: 0,   // Elapsed track time when paused
+      lastAdvanceAt: 0,
       queue: [], 
       chatHistory: [] 
     };
@@ -63,9 +65,13 @@ const broadcastState = (id) => {
 const advanceQueue = (id) => {
   const r = rooms[id];
   if (!r) return;
+  const now = Date.now();
+  if (r.lastAdvanceAt && now - r.lastAdvanceAt < 2000) return;
+  r.lastAdvanceAt = now;
+
   r.currentTrack = r.queue.shift() || null;
   r.isPlaying = !!r.currentTrack;
-  r.startTime = r.isPlaying ? Date.now() : 0;
+  r.startTime = r.isPlaying ? now : 0;
   r.pausedAt = 0;
   broadcastState(id);
 };
@@ -97,6 +103,11 @@ io.on('connection', (socket) => {
   socket.on('joinRoom', (id) => {
     if (!id) return;
     if (currentRoom) socket.leave(currentRoom);
+
+    if (roomCleanupTimers[id]) {
+      clearTimeout(roomCleanupTimers[id]);
+      delete roomCleanupTimers[id];
+    }
 
     currentRoom = id;
     socket.join(id);
@@ -175,10 +186,20 @@ io.on('connection', (socket) => {
   });
 
   socket.on('disconnect', () => {
-    // Optional: Clean up empty rooms after a brief delay or leave them intact
-    if (currentRoom && (!io.sockets.adapter.rooms.get(currentRoom) || io.sockets.adapter.rooms.get(currentRoom).size === 0)) {
-      delete rooms[currentRoom];
+    const roomToCheck = currentRoom;
+    if (!roomToCheck) return;
+
+    if (roomCleanupTimers[roomToCheck]) {
+      clearTimeout(roomCleanupTimers[roomToCheck]);
     }
+
+    roomCleanupTimers[roomToCheck] = setTimeout(() => {
+      const roomSockets = io.sockets.adapter.rooms.get(roomToCheck);
+      if (!roomSockets || roomSockets.size === 0) {
+        delete rooms[roomToCheck];
+      }
+      delete roomCleanupTimers[roomToCheck];
+    }, 30000);
   });
 });
 
