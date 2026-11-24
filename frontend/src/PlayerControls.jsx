@@ -4,17 +4,10 @@ import { Play, Pause, SkipForward, Volume2, ListMusic } from 'lucide-react';
 const formatTime = (s) => s ? `${Math.floor(s / 60)}:${Math.floor(s % 60).toString().padStart(2, '0')}` : '0:00';
 
 export const PlayerControls = ({ state, volume, setVolume, togglePlay, skipTrack, seekTo, showQueue, setShowQueue, isDarkMode, t }) => {
-  const durationSec = Number(state.currentTrack?.duration) || 0;
-  const safeCurrentTime = Number(state.currentTime) || 0;
-  const progressPct = durationSec > 0
-    ? Math.min(100, Math.max(0, (safeCurrentTime / durationSec) * 100))
-    : 0;
-
   const handleTimelineScrub = (e) => {
-    if (!state.currentTrack || !durationSec) return;
+    if (!state.currentTrack) return;
     const rect = e.currentTarget.getBoundingClientRect();
-    const ratio = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
-    seekTo(ratio * durationSec);
+    seekTo(((e.clientX - rect.left) / rect.width) * state.currentTrack.duration);
   };
 
   return (
@@ -44,11 +37,11 @@ export const PlayerControls = ({ state, volume, setVolume, togglePlay, skipTrack
           <button onClick={skipTrack} className={`${t.muted} hover:text-emerald-500 p-2`}><SkipForward className="w-4 h-4" /></button>
         </div>
         <div className="w-full flex items-center gap-2 text-[10px] font-mono">
-          <span className={t.muted}>{formatTime(safeCurrentTime)}</span>
+          <span className={t.muted}>{formatTime(state.currentTime)}</span>
           <div onClick={handleTimelineScrub} className="flex-1 bg-zinc-700/80 h-1.5 rounded-full cursor-pointer relative">
-            <div className="bg-emerald-500 h-full rounded-full transition-all duration-100" style={{ width: `${progressPct}%` }} />
+            <div className="bg-emerald-500 h-full rounded-full transition-all duration-100" style={{ width: `${(state.currentTime / (state.currentTrack?.duration || 1)) * 100}%` }} />
           </div>
-          <span className={t.muted}>{formatTime(durationSec)}</span>
+          <span className={t.muted}>{formatTime(state.currentTrack?.duration)}</span>
         </div>
       </div>
 

@@ -16,9 +16,7 @@ const io = new Server(server, {
     origin: '*',
     methods: ['GET', 'POST'],
     allowedHeaders: ['*']
-  },
-  pingTimeout: 30000, // Increase ping timeout to survive background tab throttling
-  pingInterval: 10000
+  }
 });
 
 const ytmusic = new YTMusic();
@@ -27,53 +25,45 @@ const searchCache = new NodeCache({ stdTTL: 3600 });
 ytmusic.initialize().then(() => console.log('YT Music Ready')).catch(console.error);
 
 const rooms = {};
-const roomCleanupTimers = {};
+const roomIntervals = {}; // Store intervals separately to avoid circular reference crashes!
 
 const getRoom = (id) => {
   if (!rooms[id]) {
     rooms[id] = { 
       currentTrack: null, 
       isPlaying: false, 
-      startTime: 0, // Epoch timestamp when playing started
-      pausedAt: 0,   // Elapsed track time when paused
-      lastAdvanceAt: 0,
+      currentTime: 0, 
       queue: [], 
       chatHistory: [] 
     };
+
+    roomIntervals[id] = setInterval(() => {
+      const r = rooms[id];
+      if (r?.isPlaying && r.currentTrack) {
+        if (++r.currentTime >= r.currentTrack.duration) {
+          advanceQueue(id);
+        } else {
+          broadcastState(id);
+        }
+      }
+    }, 1000);
   }
   return rooms[id];
-};
-
-// Helper to compute accurate current track time on the fly
-const getTrackCurrentTime = (r) => {
-  if (!r.isPlaying || !r.startTime) return r.pausedAt || 0;
-  const elapsed = (Date.now() - r.startTime) / 1000;
-  return r.pausedAt + elapsed;
-};
-
-const broadcastState = (id) => {
-  if (rooms[id]) {
-    const r = rooms[id];
-    // Send state along with calculated current time so clients stay perfectly in sync
-    io.to(id).emit('stateUpdate', {
-      ...r,
-      currentTime: getTrackCurrentTime(r)
-    });
-  }
 };
 
 const advanceQueue = (id) => {
   const r = rooms[id];
   if (!r) return;
-  const now = Date.now();
-  if (r.lastAdvanceAt && now - r.lastAdvanceAt < 2000) return;
-  r.lastAdvanceAt = now;
-
   r.currentTrack = r.queue.shift() || null;
   r.isPlaying = !!r.currentTrack;
-  r.startTime = r.isPlaying ? now : 0;
-  r.pausedAt = 0;
+  r.currentTime = 0;
   broadcastState(id);
+};
+
+const broadcastState = (id) => {
+  if (rooms[id]) {
+    io.to(id).emit('stateUpdate', rooms[id]);
+  }
 };
 
 app.get('/api/search', async (req, res) => {
@@ -104,29 +94,11 @@ io.on('connection', (socket) => {
     if (!id) return;
     if (currentRoom) socket.leave(currentRoom);
 
-    if (roomCleanupTimers[id]) {
-      clearTimeout(roomCleanupTimers[id]);
-      delete roomCleanupTimers[id];
-    }
-
     currentRoom = id;
     socket.join(id);
 
-    const r = getRoom(id);
-    socket.emit('stateUpdate', {
-      ...r,
-      currentTime: getTrackCurrentTime(r)
-    });
-  });
-
-  socket.on('requestSync', () => {
-    if (currentRoom && rooms[currentRoom]) {
-      const r = rooms[currentRoom];
-      socket.emit('stateUpdate', {
-        ...r,
-        currentTime: getTrackCurrentTime(r)
-      });
-    }
+    const roomState = getRoom(id);
+    socket.emit('stateUpdate', roomState);
   });
 
   socket.on('sendMessage', (data) => {
@@ -134,6 +106,7 @@ io.on('connection', (socket) => {
     if (!targetRoom || !data?.text) return;
 
     const r = getRoom(targetRoom);
+    
     const msg = {
       id: data.id || Date.now().toString(),
       sender: data.sender || 'Anonymous',
@@ -153,23 +126,13 @@ io.on('connection', (socket) => {
     const r = getRoom(currentRoom);
     r.currentTrack = track; 
     r.isPlaying = true; 
-    r.startTime = Date.now();
-    r.pausedAt = 0;
+    r.currentTime = 0;
     broadcastState(currentRoom);
   });
 
   socket.on('togglePlay', (playing) => {
     if (currentRoom && rooms[currentRoom]) { 
-      const r = rooms[currentRoom];
-      if (playing && !r.isPlaying) {
-        // Resuming
-        r.startTime = Date.now();
-      } else if (!playing && r.isPlaying) {
-        // Pausing: save current accurate time to pausedAt
-        r.pausedAt = getTrackCurrentTime(r);
-        r.startTime = 0;
-      }
-      r.isPlaying = playing; 
+      rooms[currentRoom].isPlaying = playing; 
       broadcastState(currentRoom); 
     }
   });
@@ -186,20 +149,13 @@ io.on('connection', (socket) => {
   });
 
   socket.on('disconnect', () => {
-    const roomToCheck = currentRoom;
-    if (!roomToCheck) return;
-
-    if (roomCleanupTimers[roomToCheck]) {
-      clearTimeout(roomCleanupTimers[roomToCheck]);
-    }
-
-    roomCleanupTimers[roomToCheck] = setTimeout(() => {
-      const roomSockets = io.sockets.adapter.rooms.get(roomToCheck);
-      if (!roomSockets || roomSockets.size === 0) {
-        delete rooms[roomToCheck];
+    if (currentRoom && (!io.sockets.adapter.rooms.get(currentRoom) || io.sockets.adapter.rooms.get(currentRoom).size === 0)) {
+      if (roomIntervals[currentRoom]) {
+        clearInterval(roomIntervals[currentRoom]);
+        delete roomIntervals[currentRoom];
       }
-      delete roomCleanupTimers[roomToCheck];
-    }, 30000);
+      delete rooms[currentRoom];
+    }
   });
 });
 

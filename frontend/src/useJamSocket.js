@@ -9,7 +9,7 @@ const BACKEND_URL = import.meta.env.VITE_API_URL ||
 const isSecure = window.location.protocol === 'https:';
 
 const socket = io(BACKEND_URL, { 
-  transports: ['polling', 'websocket'], 
+  transports: ['websocket'], 
   secure: isSecure, 
   rejectUnauthorized: false 
 });
@@ -18,7 +18,6 @@ export function useJamSocket() {
   const [roomId, setRoomId] = useState(() => new URLSearchParams(window.location.search).get('room') || 'lobby');
   const [searchResults, setSearchResults] = useState([]);
   const [state, setState] = useState({ currentTrack: null, isPlaying: false, currentTime: 0, queue: [], chatHistory: [] });
-  const [currentTime, setCurrentTime] = useState(0);
   const [volume, setVolume] = useState(50);
   const [popupMessage, setPopupMessage] = useState('');
   const [isAudioUnlocked, setIsAudioUnlocked] = useState(false);
@@ -53,8 +52,8 @@ export function useJamSocket() {
             playerRef.current.setVolume(volume); 
           },
           onStateChange: (e) => {
-            // Track ended -> advance room queue only when tab is visible
-            if (e.data === window.YT.PlayerState.ENDED && !document.hidden) {
+            // Track ended -> advance room queue
+            if (e.data === window.YT.PlayerState.ENDED) {
               socket.emit('trackEnded');
             }
             // Ignore auto-pauses triggered by browser tab background throttling
@@ -94,53 +93,23 @@ export function useJamSocket() {
     socket.on('stateUpdate', (newState) => {
       if (!newState) return;
       setState(newState);
-      setCurrentTime(newState.currentTime || 0);
       if (!isPlayerReady.current || !playerRef.current) return;
 
       if (newState.currentTrack) {
-        const currentUrl = playerRef.current.getVideoUrl ? playerRef.current.getVideoUrl() : '';
-        const isSameVideo = currentUrl.includes(newState.currentTrack.id);
-
-        if (!isSameVideo) {
-          playerRef.current.loadVideoById(newState.currentTrack.id, newState.currentTime || 0);
-        } else if (
-          !document.hidden &&
-          typeof newState.currentTime === 'number' &&
-          Math.abs(playerRef.current.getCurrentTime() - newState.currentTime) > 5.0
-        ) {
+        if (!(playerRef.current.getVideoUrl() || "").includes(newState.currentTrack.id)) {
+          playerRef.current.loadVideoById(newState.currentTrack.id, newState.currentTime);
+        }
+        if (Math.abs(playerRef.current.getCurrentTime() - newState.currentTime) > 5.0) {
           playerRef.current.seekTo(newState.currentTime, true);
         }
         newState.isPlaying ? playerRef.current.playVideo() : playerRef.current.pauseVideo();
       } else {
-        setCurrentTime(0);
         playerRef.current.stopVideo();
       }
     });
 
     return () => socket.off('stateUpdate');
   }, []);
-
-  // Real-time timeline progression while playing
-  useEffect(() => {
-    if (!state.isPlaying || !state.currentTrack) {
-      if (!state.currentTrack) setCurrentTime(0);
-      return;
-    }
-
-    const interval = setInterval(() => {
-      const ytTime = isPlayerReady.current && playerRef.current?.getCurrentTime
-        ? playerRef.current.getCurrentTime()
-        : null;
-
-      if (typeof ytTime === 'number' && !Number.isNaN(ytTime) && ytTime > 0) {
-        setCurrentTime(ytTime);
-      } else {
-        setCurrentTime((prev) => prev + 0.5);
-      }
-    }, 500);
-
-    return () => clearInterval(interval);
-  }, [state.isPlaying, state.currentTrack?.id]);
 
   // Volume handler
   useEffect(() => {
@@ -186,21 +155,14 @@ export function useJamSocket() {
   };
 
   const skipTrack = () => socket.emit('trackEnded');
-
-  const seekTo = (seconds) => {
-    if (!isPlayerReady.current || !playerRef.current?.seekTo) return;
-    playerRef.current.seekTo(seconds, true);
-    setCurrentTime(seconds);
-  };
+  const seekTo = (seconds) => isPlayerReady.current && playerRef.current?.seekTo(seconds, true);
 
   return {
     socket,
     playerRef,
     roomId, setRoomId,
     searchResults, setSearchResults, searchTracks,
-    state: { ...state, currentTime },
-    currentTime,
-    volume, setVolume,
+    state, volume, setVolume,
     popupMessage,
     isAudioUnlocked, unlockAudio,
     addToQueue, playTrack, togglePlay, skipTrack, seekTo
