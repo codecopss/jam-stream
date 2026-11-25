@@ -49,16 +49,20 @@ Jamstream utilizes a decoupled client-server architecture designed to handle low
 ```text
 jam-stream/
 ├── backend/
-│   ├── node_modules/
-│   ├── server.js          # Unified Socket engine & API search routes
+│   ├── package-lock.json
 │   ├── package.json
-│   └── .gitignore
-└── frontend/
-    ├── src/
-    │   ├── CompleteJamMusicApp.jsx  # Sync Player Core Component
-    │   └── main.jsx
-    ├── package.json
-    └── .gitignore
+│   └── server.js          # Unified Socket engine & API search routes
+├── frontend/
+│   ├── src/
+│   │   ├── App.jsx          # Sync Player Core Component
+│   │   ├── index.css
+│   │   └── main.jsx
+│   ├── index.html
+│   ├── package-lock.json
+│   ├── package.json
+│   ├── postcss.config.js
+│   └── tailwind.config.js
+└── README.md
 
 ```
 
